@@ -1,0 +1,24 @@
+apps:
+  - namespace      : test
+    name           : frontend
+    script         : cd apps/frontend && yarn start:dev
+    log_date_format: YYYY-MM-DD HH:mm:ss
+    error_file     : logs/frontend.stderr.log
+    out_file       : logs/frontend.stdout.log
+    pid_file       : pids/frontend.pid
+    instances      : 1
+    merge_logs     : true
+    env:
+      NODE_ENV: development
+
+  - namespace      : test
+    name           : backend
+    script         : cd apps/backend && yarn start:dev
+    log_date_format: YYYY-MM-DD HH:mm:ss
+    error_file     : logs/backend.stderr.log
+    out_file       : logs/backend.stdout.log
+    pid_file       : pids/backend.pid
+    instances      : 1
+    merge_logs     : true
+    env:
+      NODE_ENV: development
