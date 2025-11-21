@@ -1,0 +1,14 @@
+.next
+out
+logs
+pids
+node_modules
+.vscode
+
+.DS_Store
+.idea
+
+.nx/cache
+.nx/workspace-data
+
+.npmrc

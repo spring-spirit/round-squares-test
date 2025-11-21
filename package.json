@@ -1,0 +1,29 @@
+{
+  "name": "the-last-of-guss",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "setup": "yarn && concurrently \"cd apps/frontend && yarn\" \"cd apps/backend && yarn\"",
+    "build": "nx run-many -t build && nx run-many --target=build:frontend",
+    "start:dev": "nx run-many -t start:dev --parallel",
+    "stop": "ps aux | grep -E 'round-squares-test.*(vite|nest start|nx run-many)' | grep -v grep | awk '{print $2}' | xargs -r kill 2>/dev/null; lsof -ti:3000 2>/dev/null | xargs -r kill 2>/dev/null; lsof -ti:5173,5174 2>/dev/null | xargs -r kill 2>/dev/null; exit 0",
+    "lint": "nx run-many -t lint",
+    "format": "nx run-many -t format",
+    "format:prettier": "prettier --write \"**/*.ts\"",
+    "postinstall": "husky install",
+    "prepare": "husky install",
+    "dev:frontend": "nx run frontend:start:dev",
+    "dev:backend": "nx run backend:start:dev"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^20.1.0",
+    "@commitlint/config-conventional": "^20.0.0",
+    "@nx/web": "19.5.7",
+    "concurrently": "^8.2.2",
+    "husky": "^8.0.0",
+    "lint-staged": "^15.2.7",
+    "npm-run-all": "^4.1.5",
+    "nx": "19.5.7",
+    "prettier": "^2.1.2"
+  }
+}
