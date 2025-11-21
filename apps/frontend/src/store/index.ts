@@ -9,7 +9,8 @@ import {
   PURGE,
   REGISTER,
 } from 'redux-persist';
-import counterReducer from './slices/counterSlice';
+import authReducer from './slices/authSlice';
+import roundsReducer from './slices/roundsSlice';
 
 const storage = {
   getItem: (key: string): Promise<string | null> => {
@@ -32,7 +33,8 @@ const persistConfig = {
 };
 
 const rootReducer = combineReducers({
-  counter: counterReducer,
+  auth: authReducer,
+  rounds: roundsReducer,
 });
 
 const persistedReducer = persistReducer(persistConfig, rootReducer);
