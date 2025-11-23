@@ -21,7 +21,6 @@ export class AuthService {
     let user = await this.userRepository.findOne({ where: { username } });
 
     if (!user) {
-      // Create a new user
       const role = this.determineRole(username);
       const hashedPassword = await bcrypt.hash(password, 10);
       user = this.userRepository.create({
@@ -31,7 +30,6 @@ export class AuthService {
       });
       await this.userRepository.save(user);
     } else {
-      // Check if the password is valid for the existing user
       const isPasswordValid = await bcrypt.compare(password, user.password);
       if (!isPasswordValid) {
         throw new UnauthorizedException('Invalid credentials');
@@ -59,7 +57,7 @@ export class AuthService {
     if (lowerUsername === 'admin') {
       return UserRole.ADMIN;
     }
-    if (lowerUsername === 'никита' || lowerUsername === 'nikita') {
+    if (['никита', 'nikita'].includes(lowerUsername)) {
       return UserRole.NIKITA;
     }
     return UserRole.SURVIVOR;

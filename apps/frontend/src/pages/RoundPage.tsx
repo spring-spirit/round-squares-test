@@ -17,8 +17,13 @@ import {
   updateRoundScore,
   setLoading,
 } from '../store/slices/roundsSlice';
+import { logout } from '../store/slices/authSlice';
+import { socketService } from '../services/socket';
 import { api } from '../services/api';
-import Goose from '../components/Goose';
+import { handleApiError } from '../utils/errorHandler';
+import AnimatedGuss from '../components/AnimatedGuss';
+import type { RoundDetails } from '../types';
+import { RoundStatus } from '../types/enums';
 
 export default function RoundPage() {
   const { roundId } = useParams<{ roundId: string }>();
@@ -28,24 +33,111 @@ export default function RoundPage() {
   const { currentRound, isLoading } = useAppSelector((state) => state.rounds);
 
   const [timeLeft, setTimeLeft] = useState('00:00');
+  const roundStatus =
+    currentRound?.status ||
+    (() => {
+      if (!currentRound) return RoundStatus.COOLDOWN;
+      const now = new Date();
+      const start = new Date(currentRound?.startDate || '');
+      const end = new Date(currentRound?.endDate || '');
+
+      if (now < start) return RoundStatus.COOLDOWN;
+      if (now >= start && now < end) return RoundStatus.ACTIVE;
+      return RoundStatus.FINISHED;
+    })();
+
+  const canTap = roundStatus === RoundStatus.ACTIVE;
 
   useEffect(() => {
     if (!roundId) return;
 
-    const fetchRound = async () => {
-      dispatch(setLoading(true));
+    let mounted = true;
+
+    const initializeRound = async () => {
       try {
-        const data = await api.getRound(roundId);
-        dispatch(setCurrentRound(data));
+        dispatch(setLoading(true));
+
+        if (!socketService.isConnected()) {
+          await socketService.connect();
+        }
+
+        const handleRoundUpdate = (data: RoundDetails) => {
+          if (mounted) {
+            dispatch(setCurrentRound(data));
+          }
+        };
+
+        const handleRoundDetails = (data: RoundDetails) => {
+          if (mounted) {
+            dispatch(setCurrentRound(data));
+          }
+        };
+
+        const handleRoundStarted = () => {
+          if (mounted) {
+            socketService.getRound(roundId).then((data) => {
+              if (mounted) {
+                dispatch(setCurrentRound(data));
+              }
+            });
+          }
+        };
+
+        const handleRoundFinished = () => {
+          if (mounted) {
+            socketService.getRound(roundId).then((data) => {
+              if (mounted) {
+                dispatch(setCurrentRound(data));
+              }
+            });
+          }
+        };
+
+        socketService.subscribeRound(roundId, handleRoundUpdate);
+        socketService.onRoundStartedSpecific(roundId, handleRoundStarted);
+        socketService.onRoundFinishedSpecific(roundId, handleRoundFinished);
+
+        if (socketService.isConnected()) {
+          socketService.socketInstance?.on('round:details', handleRoundDetails);
+        }
+
+        const data = await socketService.getRound(roundId);
+        if (mounted) {
+          dispatch(setCurrentRound(data));
+        }
+
+        return () => {
+          socketService.unsubscribeRound(roundId);
+          socketService.offRoundStartedSpecific(roundId, handleRoundStarted);
+          socketService.offRoundFinishedSpecific(roundId, handleRoundFinished);
+          if (socketService.socketInstance) {
+            socketService.socketInstance.off(
+              'round:details',
+              handleRoundDetails,
+            );
+          }
+        };
       } catch (error) {
-        console.error('Failed to fetch round:', error);
-        navigate('/rounds');
+        const errorMessage = handleApiError(error);
+        console.error('Failed to fetch round:', errorMessage);
+        if (mounted) {
+          navigate('/rounds');
+        }
       } finally {
-        dispatch(setLoading(false));
+        if (mounted) {
+          dispatch(setLoading(false));
+        }
       }
     };
 
-    fetchRound();
+    initializeRound();
+
+    return () => {
+      mounted = false;
+      if (roundId) {
+        socketService.unsubscribeRound(roundId);
+      }
+    };
   }, [roundId, dispatch, navigate]);
 
   useEffect(() => {
@@ -57,13 +149,29 @@ export default function RoundPage() {
       const end = new Date(currentRound.endDate);
 
       let targetDate: Date;
+      let newStatus: RoundStatus;
+
       if (now < start) {
         targetDate = start;
+        newStatus = RoundStatus.COOLDOWN;
       } else if (now < end) {
         targetDate = end;
+        newStatus = RoundStatus.ACTIVE;
       } else {
         setTimeLeft('00:00');
+        newStatus = RoundStatus.FINISHED;
+        if (currentRound.status !== RoundStatus.FINISHED) {
+          socketService.getRound(roundId || '').then((data) => {
+            dispatch(setCurrentRound(data));
+          });
+        }
         return;
+      }
+
+      if (currentRound.status !== newStatus) {
+        socketService.getRound(roundId || '').then((data) => {
+          dispatch(setCurrentRound(data));
+        });
       }
 
       const diff = Math.max(0, targetDate.getTime() - now.getTime());
@@ -81,24 +189,51 @@ export default function RoundPage() {
     const interval = setInterval(updateTimer, 1000);
 
     return () => clearInterval(interval);
-  }, [currentRound]);
+  }, [currentRound, roundId, dispatch]);
 
   const handleTap = useCallback(async () => {
-    if (!roundId || !currentRound) return;
+    if (!roundId || !currentRound || !canTap) return;
 
     try {
-      const response = await api.tap(roundId);
-      dispatch(
-        updateRoundScore({
-          roundId,
-          score: response.score,
-          taps: response.taps,
-        }),
-      );
+      if (!socketService.isConnected()) {
+        await socketService.connect();
+      }
+
+      socketService
+        .tap(roundId)
+        .then((response) => {
+          dispatch(
+            updateRoundScore({
+              roundId,
+              score: response.score,
+              taps: response.taps,
+            }),
+          );
+        })
+        .catch((error) => {
+          const errorMessage =
+            error instanceof Error ? error.message : 'Failed to tap';
+          console.error('Failed to tap:', errorMessage);
+        });
     } catch (error) {
-      console.error('Failed to tap:', error);
+      const errorMessage =
+        error instanceof Error ? error.message : 'Failed to tap';
+      console.error('Failed to tap:', errorMessage);
     }
-  }, [roundId, currentRound, dispatch]);
+  }, [roundId, currentRound, canTap, dispatch]);
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+      dispatch(logout());
+      navigate('/login');
+    } catch (error) {
+      const errorMessage = handleApiError(error);
+      console.error('Failed to logout:', errorMessage);
+      dispatch(logout());
+      navigate('/login');
+    }
+  };
 
   if (isLoading || !currentRound) {
     return (
@@ -115,71 +250,83 @@ export default function RoundPage() {
     );
   }
 
-  const now = new Date();
-  const start = new Date(currentRound.startDate);
-  const end = new Date(currentRound.endDate);
-
-  let roundStatus: 'active' | 'cooldown' | 'finished';
-  if (now < start) {
-    roundStatus = 'cooldown';
-  } else if (now >= start && now < end) {
-    roundStatus = 'active';
-  } else {
-    roundStatus = 'finished';
-  }
-
-  const canTap = roundStatus === 'active';
-
   return (
     <Box>
       <AppBar position="static">
         <Toolbar>
+          <Button
+            color="inherit"
+            onClick={() => navigate('/rounds')}
+            sx={{ mr: 2 }}
+          >
+            ← Back to rounds
+          </Button>
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            {roundStatus === 'cooldown'
+            {roundStatus === RoundStatus.COOLDOWN
               ? 'Cooldown'
-              : roundStatus === 'finished'
+              : roundStatus === RoundStatus.FINISHED
               ? 'Round is finished'
-              : 'Rounds'}
+              : 'Round'}
           </Typography>
-          <Typography variant="body1">{user?.username || 'Player'}</Typography>
+          <Typography variant="body1" sx={{ mr: 2 }}>
+            {user?.username || 'Player'}
+          </Typography>
+          <Button color="inherit" onClick={handleLogout}>
+            Logout
+          </Button>
         </Toolbar>
       </AppBar>
-      <Container maxWidth="sm" sx={{ mt: 4 }}>
-        <Card>
-          <CardContent>
+      <Container
+        maxWidth="sm"
+        sx={{
+          height: 'calc(100vh - 64px)',
+          display: 'flex',
+          flexDirection: 'column',
+          justifyContent: 'center',
+          mt: 0,
+          py: 2,
+        }}
+      >
+        <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+          <CardContent
+            sx={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 2,
+              flex: 1,
+              py: 2,
+            }}
+          >
             <Box
               sx={{
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
                 gap: 2,
-                py: 4,
+                flex: 1,
+                justifyContent: 'center',
               }}
             >
-              <Goose
+              <AnimatedGuss
                 onClick={canTap ? handleTap : undefined}
                 disabled={!canTap}
+                currentRound={currentRound}
+                userRole={user?.role}
               />
 
-              {roundStatus === 'active' && (
+              {roundStatus === RoundStatus.ACTIVE && (
                 <>
                   <Typography variant="h6">Round is active!</Typography>
                   <Typography>Time left: {timeLeft}</Typography>
                   <Typography>
                     My score - {currentRound.myScore || 0}
                   </Typography>
-                  <Button
-                    variant="contained"
-                    size="large"
-                    onClick={handleTap}
-                    disabled={!canTap}
-                  >
-                    TAP!
-                  </Button>
                 </>
               )}
 
-              {roundStatus === 'cooldown' && (
+              {roundStatus === RoundStatus.COOLDOWN && (
                 <>
                   <Typography variant="h6">Cooldown</Typography>
                   <Typography>
@@ -188,7 +335,7 @@ export default function RoundPage() {
                 </>
               )}
 
-              {roundStatus === 'finished' && (
+              {roundStatus === RoundStatus.FINISHED && (
                 <>
                   <Typography variant="h6">Round is finished</Typography>
                   <Typography>Total: {currentRound.totalScore}</Typography>

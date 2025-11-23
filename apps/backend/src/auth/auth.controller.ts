@@ -5,11 +5,16 @@ import {
   Res,
   HttpCode,
   HttpStatus,
+  Get,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiBody } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { AuthService } from './auth.service';
-import { LoginDto, LoginResponseDto } from './dto/login.dto';
+import { LoginDto, LoginResponseDto, UserResponseDto } from './dto/login.dto';
+import { CurrentUser } from './decorators/current-user.decorator';
+import { User } from '../entities/user.entity';
+import { UseGuards } from '@nestjs/common';
+import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @ApiTags('auth')
 @Controller('auth')
@@ -49,5 +54,38 @@ export class AuthController {
         role: user.role,
       },
     };
+  }
+
+  @Get('me')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get current user' })
+  @ApiResponse({
+    status: 200,
+    description: 'Current user info',
+    type: UserResponseDto,
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  getMe(@CurrentUser() user: User) {
+    return {
+      id: user.id,
+      username: user.username,
+      role: user.role,
+    };
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Logout user' })
+  @ApiResponse({ status: 200, description: 'Logout successful' })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  logout(@Res({ passthrough: true }) res: Response) {
+    res.cookie('token', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 0,
+    });
+    return { message: 'Logged out successfully' };
   }
 }

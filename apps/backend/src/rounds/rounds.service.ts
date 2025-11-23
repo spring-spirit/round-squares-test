@@ -1,22 +1,23 @@
-import {
-  Injectable,
-  NotFoundException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository } from 'typeorm';
+import { DataSource, Repository, QueryRunner } from 'typeorm';
 import { Round } from '../entities/round.entity';
 import { RoundParticipant } from '../entities/round-participant.entity';
 import { User, UserRole } from '../entities/user.entity';
 import { getGameConfig } from '../config/game.config';
+import {
+  RoundDetailsResponse,
+  TapResponse,
+  PaginatedRoundsResponse,
+} from './interfaces/round.interface';
+import { RoundStatus } from './interfaces/round-status.enum';
+import { RoundValidator } from './validators/round.validator';
 
 @Injectable()
 export class RoundsService {
   constructor(
     @InjectRepository(Round)
     private roundRepository: Repository<Round>,
-    @InjectRepository(RoundParticipant)
-    private participantRepository: Repository<RoundParticipant>,
     private dataSource: DataSource,
   ) {}
 
@@ -35,29 +36,27 @@ export class RoundsService {
     return this.roundRepository.save(round);
   }
 
-  async findAll(): Promise<Round[]> {
-    return this.roundRepository.find({
+  async findAll(
+    page: number = 1,
+    limit: number = 10,
+  ): Promise<PaginatedRoundsResponse> {
+    const skip = (page - 1) * limit;
+    const [data, total] = await this.roundRepository.findAndCount({
       order: { createdAt: 'DESC' },
+      skip,
+      take: limit,
     });
+
+    return {
+      data,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   }
 
-  async findOne(
-    id: string,
-    userId?: string,
-  ): Promise<{
-    id: string;
-    startDate: string;
-    endDate: string;
-    createdAt: string;
-    totalScore: number;
-    status: 'cooldown' | 'active' | 'finished';
-    myScore: number;
-    myTaps: number;
-    winner?: {
-      username: string;
-      score: number;
-    };
-  }> {
+  async findOne(id: string, userId?: string): Promise<RoundDetailsResponse> {
     const round = await this.roundRepository.findOne({
       where: { id },
       relations: ['participants', 'participants.user'],
@@ -68,13 +67,13 @@ export class RoundsService {
     }
 
     const now = new Date();
-    let status: 'cooldown' | 'active' | 'finished';
+    let status: RoundStatus;
     if (now < round.startDate) {
-      status = 'cooldown';
+      status = RoundStatus.COOLDOWN;
     } else if (now >= round.startDate && now < round.endDate) {
-      status = 'active';
+      status = RoundStatus.ACTIVE;
     } else {
-      status = 'finished';
+      status = RoundStatus.FINISHED;
     }
 
     let myScore = 0;
@@ -89,7 +88,7 @@ export class RoundsService {
       }
     }
 
-    if (status === 'finished' && round.participants.length > 0) {
+    if (status === RoundStatus.FINISHED && round.participants.length > 0) {
       const sortedParticipants = [...round.participants].sort(
         (a, b) => b.score - a.score,
       );
@@ -115,81 +114,96 @@ export class RoundsService {
     };
   }
 
-  async tap(
-    roundId: string,
-    user: User,
-  ): Promise<{ score: number; taps: number }> {
+  async tap(roundId: string, user: User): Promise<TapResponse> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
     try {
-      // Lock the round row for reading with pessimistic locking
-      const round = await queryRunner.manager
-        .createQueryBuilder(Round, 'round')
-        .setLock('pessimistic_write')
-        .where('round.id = :id', { id: roundId })
-        .getOne();
+      const round = await this.getRoundWithLock(queryRunner, roundId);
+      RoundValidator.validateRoundExists(round);
+      RoundValidator.validateRoundIsActive(round);
 
-      if (!round) {
-        throw new NotFoundException('Round not found');
-      }
+      const participant = await this.getOrCreateParticipant(
+        queryRunner,
+        roundId,
+        user.id,
+      );
 
-      // Check if the round is active
-      const now = new Date();
-      if (now < round.startDate) {
-        throw new BadRequestException('Round has not started yet');
-      }
-      if (now >= round.endDate) {
-        throw new BadRequestException('Round has already finished');
-      }
-
-      // Find or create participant
-      let participant = await queryRunner.manager.findOne(RoundParticipant, {
-        where: { roundId, userId: user.id },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!participant) {
-        participant = queryRunner.manager.create(RoundParticipant, {
-          roundId,
-          userId: user.id,
-          taps: 0,
-          score: 0,
-        });
-      }
-
-      // Increase the taps counter
-      participant.taps += 1;
-
-      // Calculate points: each 11th tap gives 10 points, others give 1 point
-      let pointsToAdd = 1;
-      if (participant.taps % 11 === 0) {
-        pointsToAdd = 10;
-      }
-
-      // If the user is Nikita, points are not counted in the statistics
-      // but the tap still works
-      if (user.role !== UserRole.NIKITA) {
-        participant.score += pointsToAdd;
-        round.totalScore += pointsToAdd;
-      }
+      const tapResult = this.processTap(participant, round, user);
 
       await queryRunner.manager.save(participant);
       await queryRunner.manager.save(round);
 
       await queryRunner.commitTransaction();
 
-      // Return points for display (for Nikita always 0)
-      return {
-        score: user.role === UserRole.NIKITA ? 0 : participant.score,
-        taps: participant.taps,
-      };
+      return tapResult;
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
     } finally {
       await queryRunner.release();
     }
+  }
+
+  private async getRoundWithLock(
+    queryRunner: QueryRunner,
+    roundId: string,
+  ): Promise<Round | null> {
+    return await queryRunner.manager
+      .createQueryBuilder(Round, 'round')
+      .setLock('pessimistic_write')
+      .where('round.id = :id', { id: roundId })
+      .getOne();
+  }
+
+  private async getOrCreateParticipant(
+    queryRunner: QueryRunner,
+    roundId: string,
+    userId: string,
+  ): Promise<RoundParticipant> {
+    let participant = await queryRunner.manager.findOne(RoundParticipant, {
+      where: { roundId, userId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    if (!participant) {
+      participant = queryRunner.manager.create(RoundParticipant, {
+        roundId,
+        userId,
+        taps: 0,
+        score: 0,
+      });
+    }
+
+    return participant;
+  }
+
+  private processTap(
+    participant: RoundParticipant,
+    round: Round,
+    user: User,
+  ): TapResponse {
+    participant.taps += 1;
+
+    const pointsToAdd = this.calculatePoints(participant.taps);
+
+    if (!this.shouldCountPoints(user.role)) {
+      participant.score += pointsToAdd;
+      round.totalScore += pointsToAdd;
+    }
+
+    return {
+      score: this.shouldCountPoints(user.role) ? 0 : participant.score,
+      taps: participant.taps,
+    };
+  }
+
+  private calculatePoints(taps: number): number {
+    return taps % 11 === 0 ? 10 : 1;
+  }
+
+  private shouldCountPoints(role: UserRole): boolean {
+    return [UserRole.NIKITA].includes(role);
   }
 }

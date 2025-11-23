@@ -1,7 +1,11 @@
+import { UserRole, RoundStatus } from './enums';
+
+export { UserRole, RoundStatus };
+
 export interface User {
   id: string;
   username: string;
-  role: 'survivor' | 'admin' | 'nikita';
+  role: UserRole;
 }
 
 export interface Round {
@@ -10,7 +14,7 @@ export interface Round {
   endDate: string;
   createdAt: string;
   totalScore: number;
-  status: 'cooldown' | 'active' | 'finished';
+  status: RoundStatus;
   winner?: {
     username: string;
     score: number;
@@ -26,4 +30,12 @@ export interface RoundDetails extends Round {
 export interface TapResponse {
   score: number;
   taps: number;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
 }
