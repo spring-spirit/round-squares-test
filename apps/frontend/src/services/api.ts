@@ -1,4 +1,4 @@
-import type { Round, RoundDetails, TapResponse, User } from '../types';
+import type { User } from '../types';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
@@ -16,17 +16,22 @@ async function request<T>(
   });
 
   if (!response.ok) {
-    const error = await response
-      .json()
-      .catch(() => ({ message: 'Unknown error' }));
-    throw new Error(error.message || `HTTP error! status: ${response.status}`);
+    let errorMessage = `HTTP error! status: ${response.status}`;
+    try {
+      const error = await response.json();
+      errorMessage = error.message || error.error || errorMessage;
+    } catch {
+      errorMessage = response.statusText || errorMessage;
+    }
+    const error = new Error(errorMessage);
+    (error as Error & { status: number }).status = response.status;
+    throw error;
   }
 
   return response.json();
 }
 
 export const api = {
-  // Auth
   async login(username: string, password: string) {
     return request<{ user: User }>('/auth/login', {
       method: 'POST',
@@ -34,24 +39,12 @@ export const api = {
     });
   },
 
-  // Rounds
-  async getRounds() {
-    return request<Round[]>('/rounds');
+  async getMe() {
+    return request<User>('/auth/me');
   },
 
-  async getRound(roundId: string) {
-    return request<RoundDetails>(`/rounds/${roundId}`);
-  },
-
-  async createRound() {
-    return request<Round>('/rounds', {
-      method: 'POST',
-    });
-  },
-
-  // Tap
-  async tap(roundId: string) {
-    return request<TapResponse>(`/rounds/${roundId}/tap`, {
+  async logout() {
+    return request<{ message: string }>('/auth/logout', {
       method: 'POST',
     });
   },

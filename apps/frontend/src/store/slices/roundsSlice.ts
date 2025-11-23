@@ -6,6 +6,12 @@ interface RoundsState {
   currentRound: RoundDetails | null;
   isLoading: boolean;
   error: string | null;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
 }
 
 const initialState: RoundsState = {
@@ -13,6 +19,12 @@ const initialState: RoundsState = {
   currentRound: null,
   isLoading: false,
   error: null,
+  pagination: {
+    page: 1,
+    limit: 10,
+    total: 0,
+    totalPages: 0,
+  },
 };
 
 const roundsSlice = createSlice({
@@ -23,8 +35,17 @@ const roundsSlice = createSlice({
       state.isLoading = action.payload;
     },
     setRounds: (state, action) => {
-      state.rounds = action.payload;
+      if (action.payload && Array.isArray(action.payload.data)) {
+        state.rounds = action.payload.data;
+      } else if (Array.isArray(action.payload)) {
+        state.rounds = action.payload;
+      } else {
+        state.rounds = [];
+      }
       state.error = null;
+    },
+    setPagination: (state, action) => {
+      state.pagination = { ...state.pagination, ...action.payload };
     },
     setCurrentRound: (state, action) => {
       state.currentRound = action.payload;
@@ -56,6 +77,7 @@ export const {
   setCurrentRound,
   updateRoundScore,
   setError,
+  setPagination,
 } = roundsSlice.actions;
 
 export default roundsSlice.reducer;
